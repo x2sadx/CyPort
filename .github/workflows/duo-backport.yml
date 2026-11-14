@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Download published release IPAs
+      - name: Download the published releases
         shell: bash
         run: |
           set -euo pipefail
@@ -20,7 +20,7 @@ jobs:
           echo "v1.3 SHA256: $(sha256sum v1.3.ipa | cut -d' ' -f1)"
           echo "v1.4 SHA256: $(sha256sum v1.4.ipa | cut -d' ' -f1)"
 
-      - name: Backport Duo runtime from v1.4 into v1.3
+      - name: Backport the v1.4 Duo runtime into the v1.3 app
         shell: bash
         run: |
           set -euo pipefail
@@ -28,49 +28,117 @@ jobs:
           unzip -q v1.3.ipa -d old
           unzip -q v1.4.ipa -d new
           python3 <<'PY'
-          import glob, os, plistlib, shutil, sys
+          import glob, os, plistlib, shutil, struct, subprocess, zipfile
+
           def app(root):
               hits = glob.glob(root + "/Payload/*.app")
               if len(hits) != 1:
-                  raise SystemExit(f"Expected one app in {root}, found {hits}")
+                  raise SystemExit(f"Expected exactly one app in {root}; found {hits}")
               return hits[0]
+
           old, new = app("old"), app("new")
-          def required(path):
+
+          def need(path):
               if not os.path.isfile(path):
-                  raise SystemExit("Required v1.4 component missing: " + path)
+                  raise SystemExit("Required release component missing: " + path)
               return path
-          old_exec = required(old + "/Cyberpunk2077")
-          new_exec = required(new + "/Cyberpunk2077")
-          old_shim = required(old + "/Frameworks/libMacShim.dylib")
-          new_shim = required(new + "/Frameworks/libMacShim.dylib")
-          # The Duo-capable v1.4 starter and shim must both be used: the starter carries the
-          # newer iOS SDK stamp and scene lifecycle entry point; the shim implements Duo screens/layout.
-          with open(new_shim, "rb") as f:
-              shim = f.read()
-          if b"MSSceneDelegate" not in shim:
-              raise SystemExit("The v1.4 shim does not contain MSSceneDelegate; refusing an unsafe package.")
-          shutil.copy2(new_exec, old_exec)
+
+          old_exe = need(old + "/Cyberpunk2077")
+          new_exe = need(new + "/Cyberpunk2077")
+          old_shim = need(old + "/Frameworks/libMacShim.dylib")
+          new_shim = need(new + "/Frameworks/libMacShim.dylib")
+
+          def macho(path):
+              data = open(path, "rb").read(4096)
+              # Thin 64-bit Mach-O, little-endian. These releases target arm64 iOS.
+              if data[:4] != b"\xcf\xfa\xed\xfe":
+                  raise SystemExit(f"Unexpected/non-thin Mach-O header: {path}")
+              cpu = struct.unpack_from("<I", data, 4)[0]
+              if cpu != 0x0100000c:
+                  raise SystemExit(f"Expected arm64 Mach-O, got CPU 0x{cpu:08x}: {path}")
+              return data
+
+          old_exe_head = macho(old_exe)
+          new_exe_head = macho(new_exe)
+          old_shim_head = macho(old_shim)
+          new_shim_head = macho(new_shim)
+
+          shim_data = open(new_shim, "rb").read()
+          exe_data = open(new_exe, "rb").read()
+          if b"MSSceneDelegate" not in shim_data:
+              raise SystemExit("v1.4 libMacShim lacks MSSceneDelegate; refusing to package.")
+          if b"MSAllowedOrientations" not in shim_data and b"MSIsDuo" not in shim_data:
+              raise SystemExit("v1.4 shim lacks the Duo orientation implementation.")
+          if b"@rpath/libMacShim.dylib" not in exe_data and b"libMacShim.dylib" not in exe_data:
+              raise SystemExit("v1.4 starter does not reference libMacShim.dylib.")
+
+          # Use the matching v1.4 starter + shim as a pair. Do not mix the v1.3 starter
+          # with a scene-based shim: the iOS 27 scene lifecycle is an inseparable pair.
+          shutil.copy2(new_exe, old_exe)
           shutil.copy2(new_shim, old_shim)
-          old_plist = old + "/Info.plist"
-          new_plist = new + "/Info.plist"
-          with open(old_plist, "rb") as f: info = plistlib.load(f)
-          with open(new_plist, "rb") as f: ref = plistlib.load(f)
-          # Preserve v1.3 identity, bundle settings, resources and game libraries.
-          # Bring across only iOS scene/SDK metadata required by the Duo runtime.
-          keys = ("UIApplicationSceneManifest", "DTPlatformName", "DTPlatformVersion",
-                  "DTSDKName", "DTSDKBuild", "DTPlatformBuild")
-          for key in keys:
-              if key in ref: info[key] = ref[key]
-              else: info.pop(key, None)
+
+          # Keep v1.3's bundle identity, game assets, data, and game dylibs. Copy only
+          # the v1.4 metadata needed by the scene-based Duo runtime.
+          old_plist, new_plist = old + "/Info.plist", new + "/Info.plist"
+          with open(old_plist, "rb") as f:
+              info = plistlib.load(f)
+          with open(new_plist, "rb") as f:
+              ref = plistlib.load(f)
+
+          required_keys = (
+              "UIApplicationSceneManifest",
+              "UISupportedInterfaceOrientations",
+              "UISupportedInterfaceOrientations~ipad",
+              "UIApplicationSupportsIndirectInputEvents",
+              "DTPlatformName",
+              "DTPlatformVersion",
+              "DTSDKName",
+              "DTSDKBuild",
+              "DTPlatformBuild",
+          )
+          for key in required_keys:
+              if key not in ref:
+                  raise SystemExit(f"v1.4 Info.plist is missing required Duo key: {key}")
+              info[key] = ref[key]
+
+          scene = info["UIApplicationSceneManifest"]
+          configs = scene.get("UISceneConfigurations", {})
+          app_configs = configs.get("UIWindowSceneSessionRoleApplication", [])
+          if not any(c.get("UISceneDelegateClassName") == "MSSceneDelegate" for c in app_configs):
+              raise SystemExit("Merged Info.plist does not register MSSceneDelegate for the app scene.")
+
+          original_id = info.get("CFBundleIdentifier")
+          original_version = info.get("CFBundleShortVersionString")
           with open(old_plist, "wb") as f:
               plistlib.dump(info, f, fmt=plistlib.FMT_XML, sort_keys=False)
-          print("Patched v1.3 app:", old)
-          print("Retained v1.3 bundle ID:", info.get("CFBundleIdentifier"))
-          print("Applied v1.4 scene metadata and Duo-capable executable/shim.")
+
+          # Sanity check the merged bundle before packaging.
+          with open(old_plist, "rb") as f:
+              checked = plistlib.load(f)
+          assert checked.get("CFBundleIdentifier") == original_id
+          assert checked.get("CFBundleShortVersionString") == original_version
+          assert os.path.getsize(old_exe) > 0 and os.path.getsize(old_shim) > 0
+          print("Retained v1.3 bundle ID/version:", original_id, original_version)
+          print("Installed matched v1.4 arm64 starter + scene/Duo shim.")
+          print("Merged v1.4 scene manifest, orientation, and SDK metadata.")
+          print("Retained v1.3 game data/resources and all other game libraries.")
+
+          with zipfile.ZipFile("out/CyPort-v1.3-Duo-unsigned.ipa", "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
+              for base, dirs, files in os.walk("old/Payload"):
+                  dirs.sort()
+                  for name in sorted(files):
+                      full = os.path.join(base, name)
+                      arc = os.path.relpath(full, "old")
+                      z.write(full, arc)
+          with zipfile.ZipFile("out/CyPort-v1.3-Duo-unsigned.ipa") as z:
+              bad = z.testzip()
+              if bad:
+                  raise SystemExit("IPA ZIP integrity failure at " + bad)
+              names = z.namelist()
+              if not any(n.endswith(".app/Frameworks/libMacShim.dylib") for n in names):
+                  raise SystemExit("Packaged IPA is missing libMacShim.dylib")
+          print("IPA archive integrity: passed")
           PY
-          mkdir -p out
-          (cd old && zip -qry ../out/CyPort-v1.3-Duo-unsigned.ipa Payload)
-          unzip -tq out/CyPort-v1.3-Duo-unsigned.ipa
           test -s out/CyPort-v1.3-Duo-unsigned.ipa
           sha256sum out/CyPort-v1.3-Duo-unsigned.ipa
 
