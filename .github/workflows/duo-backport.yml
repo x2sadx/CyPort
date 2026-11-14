@@ -67,8 +67,8 @@ jobs:
           exe_data = open(new_exe, "rb").read()
           if b"MSSceneDelegate" not in shim_data:
               raise SystemExit("v1.4 libMacShim lacks MSSceneDelegate; refusing to package.")
-          if b"MSAllowedOrientations" not in shim_data and b"MSIsDuo" not in shim_data:
-              raise SystemExit("v1.4 shim lacks the Duo orientation implementation.")
+          if b"iPhone19,4" not in shim_data:
+              raise SystemExit("v1.4 shim lacks the iPhone Duo hardware/layout target.")
           if b"@rpath/libMacShim.dylib" not in exe_data and b"libMacShim.dylib" not in exe_data:
               raise SystemExit("v1.4 starter does not reference libMacShim.dylib.")
 
@@ -93,13 +93,15 @@ jobs:
               "DTPlatformName",
               "DTPlatformVersion",
               "DTSDKName",
-              "DTSDKBuild",
-              "DTPlatformBuild",
           )
           for key in required_keys:
               if key not in ref:
                   raise SystemExit(f"v1.4 Info.plist is missing required Duo key: {key}")
               info[key] = ref[key]
+          # Build-number fields are optional across Xcode releases; copy them when present.
+          for key in ("DTSDKBuild", "DTPlatformBuild"):
+              if key in ref:
+                  info[key] = ref[key]
 
           scene = info["UIApplicationSceneManifest"]
           configs = scene.get("UISceneConfigurations", {})
