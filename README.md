@@ -255,3 +255,5 @@ zstd decompressor (BSD, `shim/third_party/zstd/LICENSE`).
 ## iPhone Duo v1.3 backport
 
 The `duo-v1.3-backport` branch contains a GitHub Actions workflow that combines the published v1.3 game bundle with the matching v1.4 scene/Duo runtime components. The workflow validates the package, removes stale source signing metadata, and uploads an unsigned IPA artifact named `CyPort-v1.3-Duo-unsigned` for signing on-device.
+
+The exported IPA is unsigned and must be signed with Feather before installation.
