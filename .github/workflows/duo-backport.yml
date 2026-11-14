@@ -1,0 +1,83 @@
+name: Build v1.3 with iPhone Duo support
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download published release IPAs
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o v1.3.ipa "https://github.com/Thijs2004/CyPort/releases/download/v1.3/CyPort-unsigned.ipa"
+          curl -fL --retry 3 -o v1.4.ipa "https://github.com/Thijs2004/CyPort/releases/download/v1.4/CyPort-1.4.0.ipa"
+          echo "v1.3 SHA256: $(sha256sum v1.3.ipa | cut -d' ' -f1)"
+          echo "v1.4 SHA256: $(sha256sum v1.4.ipa | cut -d' ' -f1)"
+
+      - name: Backport Duo runtime from v1.4 into v1.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir old new out
+          unzip -q v1.3.ipa -d old
+          unzip -q v1.4.ipa -d new
+          python3 <<'PY'
+          import glob, os, plistlib, shutil, sys
+          def app(root):
+              hits = glob.glob(root + "/Payload/*.app")
+              if len(hits) != 1:
+                  raise SystemExit(f"Expected one app in {root}, found {hits}")
+              return hits[0]
+          old, new = app("old"), app("new")
+          def required(path):
+              if not os.path.isfile(path):
+                  raise SystemExit("Required v1.4 component missing: " + path)
+              return path
+          old_exec = required(old + "/Cyberpunk2077")
+          new_exec = required(new + "/Cyberpunk2077")
+          old_shim = required(old + "/Frameworks/libMacShim.dylib")
+          new_shim = required(new + "/Frameworks/libMacShim.dylib")
+          # The Duo-capable v1.4 starter and shim must both be used: the starter carries the
+          # newer iOS SDK stamp and scene lifecycle entry point; the shim implements Duo screens/layout.
+          with open(new_shim, "rb") as f:
+              shim = f.read()
+          if b"MSSceneDelegate" not in shim:
+              raise SystemExit("The v1.4 shim does not contain MSSceneDelegate; refusing an unsafe package.")
+          shutil.copy2(new_exec, old_exec)
+          shutil.copy2(new_shim, old_shim)
+          old_plist = old + "/Info.plist"
+          new_plist = new + "/Info.plist"
+          with open(old_plist, "rb") as f: info = plistlib.load(f)
+          with open(new_plist, "rb") as f: ref = plistlib.load(f)
+          # Preserve v1.3 identity, bundle settings, resources and game libraries.
+          # Bring across only iOS scene/SDK metadata required by the Duo runtime.
+          keys = ("UIApplicationSceneManifest", "DTPlatformName", "DTPlatformVersion",
+                  "DTSDKName", "DTSDKBuild", "DTPlatformBuild")
+          for key in keys:
+              if key in ref: info[key] = ref[key]
+              else: info.pop(key, None)
+          with open(old_plist, "wb") as f:
+              plistlib.dump(info, f, fmt=plistlib.FMT_XML, sort_keys=False)
+          print("Patched v1.3 app:", old)
+          print("Retained v1.3 bundle ID:", info.get("CFBundleIdentifier"))
+          print("Applied v1.4 scene metadata and Duo-capable executable/shim.")
+          PY
+          mkdir -p out
+          (cd old && zip -qry ../out/CyPort-v1.3-Duo-unsigned.ipa Payload)
+          unzip -tq out/CyPort-v1.3-Duo-unsigned.ipa
+          test -s out/CyPort-v1.3-Duo-unsigned.ipa
+          sha256sum out/CyPort-v1.3-Duo-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: CyPort-v1.3-Duo-unsigned
+          path: out/CyPort-v1.3-Duo-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
