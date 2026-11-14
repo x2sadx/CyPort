@@ -134,6 +134,10 @@ jobs:
           with open(old_plist, "wb") as f:
               plistlib.dump(info, f, fmt=plistlib.FMT_XML, sort_keys=False)
 
+          # Remove stale signing metadata from the source release; Feather will sign the final IPA.
+          find old/Payload -type d -name _CodeSignature -prune -exec rm -rf {} +
+          find old/Payload -type f -name embedded.mobileprovision -delete
+
           # Sanity check the merged bundle before packaging.
           with open(old_plist, "rb") as f:
               checked = plistlib.load(f)
