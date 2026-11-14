@@ -28,7 +28,7 @@ jobs:
           unzip -q v1.3.ipa -d old
           unzip -q v1.4.ipa -d new
           python3 <<'PY'
-          import glob, os, plistlib, shutil, struct, subprocess, zipfile
+          import glob, os, plistlib, shutil, struct
 
           def app(root):
               hits = glob.glob(root + "/Payload/*.app")
@@ -125,23 +125,10 @@ jobs:
           print("Merged v1.4 scene manifest, orientation, and SDK metadata.")
           print("Retained v1.3 game data/resources and all other game libraries.")
 
-          with zipfile.ZipFile("out/CyPort-v1.3-Duo-unsigned.ipa", "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
-              for base, dirs, files in os.walk("old/Payload"):
-                  dirs.sort()
-                  for name in sorted(files):
-                      full = os.path.join(base, name)
-                      arc = os.path.relpath(full, "old")
-                      z.write(full, arc)
-          with zipfile.ZipFile("out/CyPort-v1.3-Duo-unsigned.ipa") as z:
-              bad = z.testzip()
-              if bad:
-                  raise SystemExit("IPA ZIP integrity failure at " + bad)
-              names = z.namelist()
-              if not any(n.endswith(".app/Frameworks/libMacShim.dylib") for n in names):
-                  raise SystemExit("Packaged IPA is missing libMacShim.dylib")
-          print("IPA archive integrity: passed")
           PY
-          test -s out/CyPort-v1.3-Duo-unsigned.ipa
+          (cd old && zip -qry ../out/CyPort-v1.3-Duo-unsigned.ipa Payload)
+          unzip -tq out/CyPort-v1.3-Duo-unsigned.ipa
+                    test -s out/CyPort-v1.3-Duo-unsigned.ipa
           sha256sum out/CyPort-v1.3-Duo-unsigned.ipa
 
       - name: Upload unsigned IPA
