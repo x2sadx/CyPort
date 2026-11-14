@@ -134,10 +134,6 @@ jobs:
           with open(old_plist, "wb") as f:
               plistlib.dump(info, f, fmt=plistlib.FMT_XML, sort_keys=False)
 
-          # Remove stale signing metadata from the source release; Feather will sign the final IPA.
-          find old/Payload -type d -name _CodeSignature -prune -exec rm -rf {} +
-          find old/Payload -type f -name embedded.mobileprovision -delete
-
           # Sanity check the merged bundle before packaging.
           with open(old_plist, "rb") as f:
               checked = plistlib.load(f)
@@ -150,6 +146,9 @@ jobs:
           print("Retained v1.3 game data/resources and all other game libraries.")
 
           PY
+          # Remove stale signing metadata from the source release; Feather will sign the final IPA.
+          find old/Payload -type d -name _CodeSignature -prune -exec rm -rf {} +
+          find old/Payload -type f -name embedded.mobileprovision -delete
           (cd old && zip -qry ../out/CyPort-v1.3-Duo-unsigned.ipa Payload)
           unzip -tq out/CyPort-v1.3-Duo-unsigned.ipa
           test -s out/CyPort-v1.3-Duo-unsigned.ipa
