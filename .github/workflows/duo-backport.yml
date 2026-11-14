@@ -1,6 +1,8 @@
 name: Build v1.3 with iPhone Duo support
 
 on:
+  push:
+    branches: [duo-v1.3-backport]
   workflow_dispatch:
 
 permissions:
