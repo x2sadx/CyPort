@@ -58,10 +58,28 @@ jobs:
                   raise SystemExit(f"Expected arm64 Mach-O, got CPU 0x{cpu:08x}: {path}")
               return data
 
+          def sdk_version(path):
+              with open(path, "rb") as f:
+                  data = f.read()
+              ncmds = struct.unpack_from("<I", data, 16)[0]
+              off = 32
+              for _ in range(ncmds):
+                  cmd, size = struct.unpack_from("<II", data, off)
+                  if size < 8 or off + size > len(data):
+                      raise SystemExit("Malformed Mach-O load command: " + path)
+                  if cmd == 0x32:  # LC_BUILD_VERSION
+                      sdk = struct.unpack_from("<I", data, off + 12)[0]
+                      return (sdk >> 16, (sdk >> 8) & 0xff, sdk & 0xff)
+                  off += size
+              raise SystemExit("v1.4 starter has no LC_BUILD_VERSION SDK stamp.")
+
           old_exe_head = macho(old_exe)
           new_exe_head = macho(new_exe)
           old_shim_head = macho(old_shim)
           new_shim_head = macho(new_shim)
+          sdk = sdk_version(new_exe)
+          if sdk[0] < 27:
+              raise SystemExit(f"v1.4 starter SDK is {sdk}, not the iOS 27+ SDK required for Duo real-screen sizing.")
 
           shim_data = open(new_shim, "rb").read()
           exe_data = open(new_exe, "rb").read()
@@ -121,14 +139,14 @@ jobs:
           assert checked.get("CFBundleShortVersionString") == original_version
           assert os.path.getsize(old_exe) > 0 and os.path.getsize(old_shim) > 0
           print("Retained v1.3 bundle ID/version:", original_id, original_version)
-          print("Installed matched v1.4 arm64 starter + scene/Duo shim.")
+          print("Installed matched v1.4 arm64 starter + scene/Duo shim; SDK:", sdk)
           print("Merged v1.4 scene manifest, orientation, and SDK metadata.")
           print("Retained v1.3 game data/resources and all other game libraries.")
 
           PY
           (cd old && zip -qry ../out/CyPort-v1.3-Duo-unsigned.ipa Payload)
           unzip -tq out/CyPort-v1.3-Duo-unsigned.ipa
-                    test -s out/CyPort-v1.3-Duo-unsigned.ipa
+          test -s out/CyPort-v1.3-Duo-unsigned.ipa
           sha256sum out/CyPort-v1.3-Duo-unsigned.ipa
 
       - name: Upload unsigned IPA
