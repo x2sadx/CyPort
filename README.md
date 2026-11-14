@@ -250,3 +250,8 @@ The CyPort code is **MIT** licensed (see `LICENSE`). It does not include and doe
 CD PROJEKT RED content.
 Included decoders for the store downloads: LZMA decoder from the 7-Zip LZMA SDK (public domain, `shim/third_party/lzma`) and the
 zstd decompressor (BSD, `shim/third_party/zstd/LICENSE`).
+
+
+## iPhone Duo v1.3 backport
+
+The `duo-v1.3-backport` branch contains a GitHub Actions workflow that combines the published v1.3 game bundle with the matching v1.4 scene/Duo runtime components. The workflow validates the package and uploads an unsigned IPA artifact named `CyPort-v1.3-Duo-unsigned`.
